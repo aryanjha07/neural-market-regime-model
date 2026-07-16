@@ -1,0 +1,37 @@
+seed: 42
+
+data:
+  start: "2005-01-01"
+  end: null
+  equity_ticker: "SPY"
+  bond_ticker: "IEF"
+  vix_ticker: "^VIX"
+  cache_dir: "data/raw"
+
+features:
+  volatility_window: 20
+  volume_window: 20
+  momentum_window: 20
+
+split:
+  train_fraction: 0.70
+  validation_fraction: 0.15
+
+model:
+  n_states: 3
+  n_mixtures: 3
+  n_restarts: 3
+  epochs: 40
+  emission_steps: 5
+  learning_rate: 0.01
+  min_covar: 0.0001
+  min_scale: 0.001
+
+backtest:
+  calm_equity_weight: 0.80
+  neutral_equity_weight: 0.60
+  crisis_equity_weight: 0.20
+  transaction_cost_bps: 5.0
+  confidence_threshold: 0.55
+  rebalance_frequency: "weekly"
+  execution_lag: 2
