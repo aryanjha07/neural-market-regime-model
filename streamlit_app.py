@@ -29,9 +29,9 @@ from market_regime.dashboard import (  # noqa: E402
 LOCAL_FORECAST = ROOT / "artifacts/live_predictions/latest_forecast.json"
 LOCAL_HISTORY = ROOT / "artifacts/live_predictions/prediction_history.csv"
 REGIME_COLORS = {
-    "Calm": "#0F766E",
-    "Trending": "#D97706",
-    "Crisis": "#C2413B",
+    "Calm": "#2AF598",
+    "Trending": "#FFB000",
+    "Crisis": "#FF4D6D",
 }
 
 
@@ -72,8 +72,16 @@ def _probability_chart(frame: pd.DataFrame) -> None:
     st.vega_lite_chart(
         frame,
         {
+            "background": None,
             "height": 238,
-            "mark": {"type": "bar", "cornerRadiusEnd": 4, "height": 26},
+            "mark": {
+                "type": "bar",
+                "cornerRadiusEnd": 4,
+                "height": 26,
+                "opacity": 0.92,
+                "stroke": "#E6F1F5",
+                "strokeOpacity": 0.2,
+            },
             "encoding": {
                 "y": {
                     "field": "Regime",
@@ -97,6 +105,16 @@ def _probability_chart(frame: pd.DataFrame) -> None:
                     {"field": "Regime", "type": "nominal"},
                     {"field": "Probability", "type": "quantitative", "format": ".2%"},
                 ],
+            },
+            "config": {
+                "view": {"stroke": None},
+                "axis": {
+                    "domainColor": "#354550",
+                    "gridColor": "#1E2B34",
+                    "labelColor": "#A8BAC5",
+                    "tickColor": "#354550",
+                    "titleColor": "#E6F1F5",
+                },
             },
         },
         width="stretch",
@@ -136,23 +154,31 @@ def _update_countdown() -> None:
           window.setInterval(updateCountdown, 1000);
         </script>
         <style>
-          html, body {{ margin: 0; background: transparent; }}
+          html, body {{ height: 100%; margin: 0; background: transparent; }}
           .update-timer {{
             box-sizing: border-box;
+            height: 100%;
             min-height: 58px;
             display: flex;
             align-items: center;
             gap: 14px;
             padding: 10px 14px;
-            border: 1px solid #D7DEE8;
+            border: 1px solid #00E5FF;
             border-radius: 6px;
-            background: #FFFFFF;
-            color: #172033;
+            background: #0B1218;
+            color: #E6F1F5;
+            box-shadow: inset 0 0 18px rgba(0, 229, 255, 0.05),
+                        0 0 16px rgba(0, 229, 255, 0.10);
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
           }}
-          .timer-label {{ color: #526074; font-size: 14px; }}
-          #countdown {{ font-size: 20px; white-space: nowrap; }}
-          .timer-schedule {{ margin-left: auto; color: #667085; font-size: 12px; }}
+          .timer-label {{ color: #8FA5B3; font-size: 14px; }}
+          #countdown {{
+            color: #F6FDFF;
+            font-size: 20px;
+            text-shadow: 0 0 12px rgba(0, 229, 255, 0.6);
+            white-space: nowrap;
+          }}
+          .timer-schedule {{ margin-left: auto; color: #65D6E4; font-size: 12px; }}
           @media (max-width: 560px) {{
             .update-timer {{ flex-wrap: wrap; gap: 3px 10px; }}
             .timer-label {{ width: 100%; }}
@@ -161,7 +187,7 @@ def _update_countdown() -> None:
         </style>
         """,
         width="stretch",
-        height=70,
+        height=88,
         tab_index=-1,
     )
 
@@ -175,27 +201,119 @@ st.set_page_config(
 st.html(
     """
     <style>
-    .stApp { background: #F8FAFC; color: #172033; }
-    .block-container { max-width: 1180px; padding-top: 2rem; padding-bottom: 2.5rem; }
+    :root { color-scheme: dark; }
+    .stApp,
+    [data-testid="stAppViewContainer"] {
+        background: #070A0F;
+        color: #E6F1F5;
+    }
+    .stApp::before {
+        content: "";
+        position: fixed;
+        inset: 0 0 auto 0;
+        z-index: 999999;
+        height: 2px;
+        background: #00E5FF;
+        box-shadow: 0 0 16px rgba(0, 229, 255, 0.85);
+        pointer-events: none;
+    }
+    header[data-testid="stHeader"] { background: rgba(7, 10, 15, 0.96); }
+    .block-container {
+        width: 100%;
+        max-width: none !important;
+        padding: 1.65rem clamp(1rem, 2.2vw, 3rem) 3rem;
+    }
     h1, h2, h3, p, span, label { letter-spacing: 0 !important; }
-    h1 { font-size: 2rem !important; line-height: 1.18 !important; }
-    h2 { font-size: 1.25rem !important; }
-    h3 { font-size: 1rem !important; }
+    h1 {
+        color: #F6FDFF !important;
+        font-size: 2rem !important;
+        line-height: 1.18 !important;
+        text-shadow: 0 0 24px rgba(0, 229, 255, 0.28);
+    }
+    h2 { color: #F6FDFF !important; font-size: 1.25rem !important; }
+    h3 { color: #DDF7FA !important; font-size: 1rem !important; }
+    [data-testid="stCaptionContainer"],
+    [data-testid="stCaptionContainer"] p { color: #8FA5B3 !important; }
+    hr { border-color: #1C2A33 !important; }
     div[data-testid="stMetric"] {
-        background: #FFFFFF;
-        border: 1px solid #D7DEE8;
+        background: #0B1218;
+        border: 1px solid #20303A;
         border-radius: 6px;
         min-height: 116px;
         padding: 14px 16px;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
     }
-    div[data-testid="stMetricLabel"] { color: #526074; }
-    div[data-testid="stMetricValue"] { font-size: 1.45rem; }
-    div[data-testid="stTabs"] button { min-height: 46px; }
+    div[data-testid="stMetricLabel"] { color: #8FA5B3; }
+    div[data-testid="stMetricValue"] { color: #F6FDFF; font-size: 1.45rem; }
+    div[data-testid="stMetricDelta"] { color: #89A0AD; }
+    .st-key-status_metrics [data-testid="stColumn"]:nth-child(1) [data-testid="stMetric"] {
+        border-color: rgba(255, 176, 0, 0.62);
+        box-shadow: inset 0 0 18px rgba(255, 176, 0, 0.025),
+                    0 0 16px rgba(255, 176, 0, 0.10);
+    }
+    .st-key-status_metrics [data-testid="stColumn"]:nth-child(2) [data-testid="stMetric"] {
+        border-color: rgba(0, 229, 255, 0.62);
+        box-shadow: inset 0 0 18px rgba(0, 229, 255, 0.025),
+                    0 0 16px rgba(0, 229, 255, 0.10);
+    }
+    .st-key-status_metrics [data-testid="stColumn"]:nth-child(3) [data-testid="stMetric"] {
+        border-color: rgba(42, 245, 152, 0.62);
+        box-shadow: inset 0 0 18px rgba(42, 245, 152, 0.025),
+                    0 0 16px rgba(42, 245, 152, 0.10);
+    }
+    .st-key-status_metrics [data-testid="stColumn"]:nth-child(4) [data-testid="stMetric"] {
+        border-color: rgba(255, 77, 109, 0.62);
+        box-shadow: inset 0 0 18px rgba(255, 77, 109, 0.025),
+                    0 0 16px rgba(255, 77, 109, 0.10);
+    }
+    div[data-testid="stTabs"] button {
+        min-height: 46px;
+        color: #8FA5B3;
+    }
+    button[role="tab"][aria-selected="true"] {
+        color: #00E5FF !important;
+        text-shadow: 0 0 10px rgba(0, 229, 255, 0.4);
+    }
+    div[data-baseweb="tab-highlight"] {
+        background-color: #00E5FF !important;
+        box-shadow: 0 0 12px rgba(0, 229, 255, 0.65);
+    }
+    button[data-testid="stBaseButton-secondary"] {
+        background: #0B1218;
+        border: 1px solid #00BFD4;
+        color: #DDFBFF !important;
+        border-radius: 6px;
+    }
+    button[data-testid="stBaseButton-secondary"] p,
+    button[data-testid="stBaseButton-secondary"] span {
+        color: inherit !important;
+    }
+    button[data-testid="stBaseButton-secondary"]:hover {
+        border-color: #00E5FF;
+        color: #FFFFFF !important;
+        box-shadow: 0 0 14px rgba(0, 229, 255, 0.24);
+    }
+    div[data-testid="stSegmentedControl"] button {
+        background: #0B1218;
+        border-color: #263741;
+        color: #A8BAC5;
+    }
+    div[data-testid="stSegmentedControl"] button[aria-pressed="true"] {
+        background: #0C2630;
+        border-color: #00E5FF;
+        color: #E8FDFF;
+        box-shadow: inset 0 0 12px rgba(0, 229, 255, 0.12);
+    }
     div[data-testid="stAlert"] { border-radius: 6px; }
-    div[data-testid="stDataFrame"] { border: 1px solid #D7DEE8; border-radius: 6px; }
-    .footer-note { color: #667085; font-size: 0.82rem; margin-top: 1.5rem; }
+    div[data-testid="stDataFrame"] {
+        border: 1px solid #20303A;
+        border-radius: 6px;
+        background: #0B1218;
+    }
+    iframe[title="st.iframe"] { border: 0; }
+    .footer-note { color: #718693; font-size: 0.82rem; margin-top: 1.5rem; }
     @media (max-width: 640px) {
-        .block-container { padding-top: 3.75rem; }
+        .block-container { padding: 3.75rem 1rem 2.5rem; }
         h1 { font-size: 1.65rem !important; }
         div[data-testid="stMetric"] { min-height: 104px; }
     }
@@ -239,31 +357,32 @@ st.caption(
 
 _update_countdown()
 
-metric_columns = st.columns(4)
-metric_columns[0].metric(
-    "Next-session regime",
-    next_regime.regime,
-    f"{next_regime.probability:.1%} model probability",
-    delta_color="off",
-)
-metric_columns[1].metric(
-    "Current regime",
-    current_regime.regime,
-    f"{current_regime.probability:.1%} model probability",
-    delta_color="off",
-)
-metric_columns[2].metric(
-    "Data status",
-    freshness_name,
-    f"{business_day_lag} weekday lag",
-    delta_color="off",
-)
-metric_columns[3].metric(
-    "Model age",
-    f"{snapshot.new_observations_since_training} sessions",
-    f"trained through {snapshot.model_data_cutoff:%b %d, %Y}",
-    delta_color="off",
-)
+with st.container(key="status_metrics"):
+    metric_columns = st.columns(4)
+    metric_columns[0].metric(
+        "Next-session regime",
+        next_regime.regime,
+        f"{next_regime.probability:.1%} model probability",
+        delta_color="off",
+    )
+    metric_columns[1].metric(
+        "Current regime",
+        current_regime.regime,
+        f"{current_regime.probability:.1%} model probability",
+        delta_color="off",
+    )
+    metric_columns[2].metric(
+        "Data status",
+        freshness_name,
+        f"{business_day_lag} weekday lag",
+        delta_color="off",
+    )
+    metric_columns[3].metric(
+        "Model age",
+        f"{snapshot.new_observations_since_training} sessions",
+        f"trained through {snapshot.model_data_cutoff:%b %d, %Y}",
+        delta_color="off",
+    )
 
 if freshness_name == "Stale":
     st.error(
