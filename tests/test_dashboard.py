@@ -10,8 +10,10 @@ from market_regime.dashboard import (
     allocation_target,
     business_days_since,
     freshness,
+    load_backtest,
     load_forecast,
     next_scheduled_run,
+    parse_backtest,
     parse_forecast,
     parse_history,
 )
@@ -154,6 +156,59 @@ def test_prediction_history_requires_normalized_unique_rows() -> None:
     blank_regime[0]["regime"] = " "
     with pytest.raises(DashboardDataError, match="regime values cannot be empty"):
         parse_history(pd.DataFrame(blank_regime).to_csv(index=False).encode())
+
+
+def test_backtest_data_is_validated_and_loaded(tmp_path) -> None:
+    rows = pd.DataFrame(
+        {
+            "date": ["2025-01-02", "2025-01-03"],
+            "adaptive_return": [0.01, -0.02],
+            "static_60_40_return": [0.005, -0.01],
+            "adaptive_equity_weight": [0.8, 0.6],
+            "static_60_40_equity_weight": [0.6, 0.61],
+            "adaptive_turnover": [0.0, 0.2],
+            "adaptive_cost": [0.0, 0.0001],
+        }
+    )
+    parsed = parse_backtest(rows.to_csv(index=False).encode())
+
+    assert isinstance(parsed.index, pd.DatetimeIndex)
+    assert parsed.index.is_monotonic_increasing
+    assert parsed["adaptive_return"].tolist() == pytest.approx([0.01, -0.02])
+
+    path = tmp_path / "backtest.csv"
+    rows.to_csv(path, index=False)
+    loaded = load_backtest(path)
+    assert loaded.source == str(path)
+    assert len(loaded.frame) == 2
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "match"),
+    [
+        ("adaptive_return", -1.0, "greater than -100%"),
+        ("adaptive_equity_weight", 1.2, "between zero and one"),
+        ("static_60_40_equity_weight", -0.2, "between zero and one"),
+        ("adaptive_turnover", -0.1, "cannot be negative"),
+        ("adaptive_cost", float("nan"), "non-finite"),
+    ],
+)
+def test_backtest_data_rejects_unsafe_values(column, value, match) -> None:
+    rows = pd.DataFrame(
+        {
+            "date": ["2025-01-02", "2025-01-03"],
+            "adaptive_return": [0.01, -0.02],
+            "static_60_40_return": [0.005, -0.01],
+            "adaptive_equity_weight": [0.8, 0.6],
+            "static_60_40_equity_weight": [0.6, 0.61],
+            "adaptive_turnover": [0.0, 0.2],
+            "adaptive_cost": [0.0, 0.0001],
+        }
+    )
+    rows.loc[1, column] = value
+
+    with pytest.raises(DashboardDataError, match=match):
+        parse_backtest(rows.to_csv(index=False).encode())
 
 
 def test_freshness_counts_weekdays_without_marking_a_weekend_stale(forecast_payload) -> None:

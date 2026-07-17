@@ -14,18 +14,21 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from market_regime.backtest import performance_metrics  # noqa: E402
 from market_regime.dashboard import (  # noqa: E402
     DEFAULT_FORECAST_URL,
     DEFAULT_HISTORY_URL,
     DashboardDataError,
     allocation_target,
     freshness,
+    load_backtest,
     load_forecast,
     load_history,
     most_likely,
     next_scheduled_run,
 )
 
+LOCAL_BACKTEST = ROOT / "dashboard_data/neural_walk_forward_backtest.csv"
 LOCAL_FORECAST = ROOT / "artifacts/live_predictions/latest_forecast.json"
 LOCAL_HISTORY = ROOT / "artifacts/live_predictions/prediction_history.csv"
 REGIME_COLORS = {
@@ -54,6 +57,12 @@ def _forecast(forecast_url: str):
 @st.cache_data(ttl=300, show_spinner=False)
 def _history(history_url: str):
     return load_history(LOCAL_HISTORY, history_url)
+
+
+@st.cache_data(show_spinner=False)
+def _backtest(path: str, modified_ns: int):
+    del modified_ns
+    return load_backtest(path)
 
 
 def _probability_frame(rows) -> pd.DataFrame:  # noqa: ANN001
@@ -104,6 +113,68 @@ def _probability_chart(frame: pd.DataFrame) -> None:
                 "tooltip": [
                     {"field": "Regime", "type": "nominal"},
                     {"field": "Probability", "type": "quantitative", "format": ".2%"},
+                ],
+            },
+            "config": {
+                "view": {"stroke": None},
+                "axis": {
+                    "domainColor": "#354550",
+                    "gridColor": "#1E2B34",
+                    "labelColor": "#A8BAC5",
+                    "tickColor": "#354550",
+                    "titleColor": "#E6F1F5",
+                },
+            },
+        },
+        width="stretch",
+    )
+
+
+def _comparison_chart(frame: pd.DataFrame, *, y_title: str, y_format: str) -> None:
+    chart_data = (
+        frame.rename_axis("Date")
+        .reset_index()
+        .melt(
+            id_vars="Date",
+            var_name="Strategy",
+            value_name="Value",
+        )
+    )
+    st.vega_lite_chart(
+        chart_data,
+        {
+            "background": None,
+            "height": 340,
+            "mark": {"type": "line", "strokeWidth": 2.2},
+            "encoding": {
+                "x": {
+                    "field": "Date",
+                    "type": "temporal",
+                    "axis": {"title": None, "grid": False},
+                },
+                "y": {
+                    "field": "Value",
+                    "type": "quantitative",
+                    "axis": {"title": y_title, "format": y_format, "grid": True},
+                    "scale": {"zero": False},
+                },
+                "color": {
+                    "field": "Strategy",
+                    "type": "nominal",
+                    "scale": {
+                        "domain": ["Neural adaptive", "Static 60/40"],
+                        "range": ["#00E5FF", "#FFB000"],
+                    },
+                    "legend": {
+                        "title": None,
+                        "orient": "top",
+                        "labelColor": "#C7D7DF",
+                    },
+                },
+                "tooltip": [
+                    {"field": "Date", "type": "temporal", "format": "%b %d, %Y"},
+                    {"field": "Strategy", "type": "nominal"},
+                    {"field": "Value", "type": "quantitative", "format": y_format},
                 ],
             },
             "config": {
@@ -392,7 +463,9 @@ if freshness_name == "Stale":
 elif freshness_name == "Delayed":
     st.warning("The latest completed market data may be delayed by a holiday or provider update.")
 
-forecast_tab, history_tab, model_tab = st.tabs(["Forecast", "History", "Model details"])
+forecast_tab, backtest_tab, history_tab, model_tab = st.tabs(
+    ["Forecast", "Backtest", "History", "Model details"]
+)
 
 with forecast_tab:
     chart_column, allocation_column = st.columns([1.7, 1], gap="large")
@@ -460,6 +533,144 @@ with forecast_tab:
             ),
         },
     )
+
+with backtest_tab:
+    st.subheader("Adaptive strategy vs static 60/40")
+    try:
+        backtest_modified_ns = LOCAL_BACKTEST.stat().st_mtime_ns if LOCAL_BACKTEST.exists() else 0
+        loaded_backtest = _backtest(str(LOCAL_BACKTEST), backtest_modified_ns)
+    except DashboardDataError as exc:
+        st.info("The walk-forward comparison is temporarily unavailable.")
+        st.caption(str(exc))
+    else:
+        backtest = loaded_backtest.frame
+        control_columns = st.columns([2.2, 1], gap="large")
+        with control_columns[0]:
+            period = st.segmented_control(
+                "Evaluation window",
+                ["Full history", "5 years", "3 years", "1 year"],
+                default="Full history",
+            )
+        with control_columns[1]:
+            starting_value = st.number_input(
+                "Starting value",
+                min_value=1_000,
+                max_value=1_000_000,
+                value=10_000,
+                step=1_000,
+                format="%d",
+            )
+
+        period_years = {"5 years": 5, "3 years": 3, "1 year": 1}
+        if period in period_years:
+            first_date = backtest.index.max() - pd.DateOffset(years=period_years[period])
+            selected_backtest = backtest.loc[backtest.index >= first_date]
+        else:
+            selected_backtest = backtest
+
+        adaptive_metrics = performance_metrics(selected_backtest["adaptive_return"])
+        benchmark_metrics = performance_metrics(selected_backtest["static_60_40_return"])
+        returns = selected_backtest[["adaptive_return", "static_60_40_return"]].rename(
+            columns={
+                "adaptive_return": "Neural adaptive",
+                "static_60_40_return": "Static 60/40",
+            }
+        )
+        growth = (1.0 + returns).cumprod() * starting_value
+        peaks = growth.cummax().clip(lower=starting_value)
+        drawdown = growth / peaks - 1.0
+
+        metric_columns = st.columns(4)
+        ending_difference = growth.iloc[-1, 0] - growth.iloc[-1, 1]
+        annual_return_difference = (
+            adaptive_metrics["annualized_return"] - benchmark_metrics["annualized_return"]
+        )
+        metric_columns[0].metric(
+            "Adaptive ending value",
+            f"${growth.iloc[-1, 0]:,.0f}",
+            f"${ending_difference:+,.0f} vs 60/40",
+        )
+        metric_columns[1].metric(
+            "Annualized return",
+            f"{adaptive_metrics['annualized_return']:.2%}",
+            f"{annual_return_difference:+.2%}",
+        )
+        metric_columns[2].metric(
+            "Sharpe ratio",
+            f"{adaptive_metrics['sharpe_ratio']:.2f}",
+            f"{adaptive_metrics['sharpe_ratio'] - benchmark_metrics['sharpe_ratio']:+.2f}",
+        )
+        metric_columns[3].metric(
+            "Maximum drawdown",
+            f"{adaptive_metrics['max_drawdown']:.2%}",
+            f"{adaptive_metrics['max_drawdown'] - benchmark_metrics['max_drawdown']:+.2%}",
+            delta_color="inverse",
+        )
+
+        chart_view = st.segmented_control(
+            "Chart view",
+            ["Growth", "Drawdown", "Stock allocation"],
+            default="Growth",
+        )
+        if chart_view == "Drawdown":
+            _comparison_chart(drawdown, y_title="Drawdown", y_format=".1%")
+        elif chart_view == "Stock allocation":
+            allocation = pd.DataFrame(
+                {
+                    "Neural adaptive": selected_backtest["adaptive_equity_weight"],
+                    "Static 60/40": selected_backtest["static_60_40_equity_weight"],
+                },
+                index=selected_backtest.index,
+            )
+            _comparison_chart(
+                allocation, y_title=f"{snapshot.assets['equity']} weight", y_format=".0%"
+            )
+        else:
+            _comparison_chart(growth, y_title="Portfolio value", y_format="$,.0f")
+
+        metric_table = pd.DataFrame(
+            {
+                "Strategy": ["Neural adaptive", "Static 60/40"],
+                "Total return": [
+                    adaptive_metrics["total_return"],
+                    benchmark_metrics["total_return"],
+                ],
+                "Annualized return": [
+                    adaptive_metrics["annualized_return"],
+                    benchmark_metrics["annualized_return"],
+                ],
+                "Volatility": [
+                    adaptive_metrics["annualized_volatility"],
+                    benchmark_metrics["annualized_volatility"],
+                ],
+                "Sharpe": [
+                    adaptive_metrics["sharpe_ratio"],
+                    benchmark_metrics["sharpe_ratio"],
+                ],
+                "Maximum drawdown": [
+                    adaptive_metrics["max_drawdown"],
+                    benchmark_metrics["max_drawdown"],
+                ],
+            }
+        )
+        st.dataframe(
+            metric_table,
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "Total return": st.column_config.NumberColumn(format="percent"),
+                "Annualized return": st.column_config.NumberColumn(format="percent"),
+                "Volatility": st.column_config.NumberColumn(format="percent"),
+                "Sharpe": st.column_config.NumberColumn(format="%.2f"),
+                "Maximum drawdown": st.column_config.NumberColumn(format="percent"),
+            },
+        )
+        st.caption(
+            f"{selected_backtest.index.min():%b %d, %Y} to "
+            f"{selected_backtest.index.max():%b %d, %Y} · "
+            f"{len(selected_backtest):,} unseen walk-forward test sessions · "
+            "weekly decisions · 2-session execution delay · 5 bps transaction costs."
+        )
 
 with history_tab:
     st.subheader("Published next-session probabilities")

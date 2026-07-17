@@ -371,6 +371,12 @@ settings, then falls back to these public Release assets:
 - `https://github.com/aryanjha07/neural-market-regime-model/releases/download/live-forecast/latest_forecast.json`
 - `https://github.com/aryanjha07/neural-market-regime-model/releases/download/live-forecast/prediction_history.csv`
 
+The **Backtest** tab reads `dashboard_data/neural_walk_forward_backtest.csv`, a
+compact copy of the neural model's unseen walk-forward test results. Users can
+change the time window and starting value, compare growth and drawdowns against
+static 60/40, and inspect how the adaptive stock weight changed. The displayed
+metrics are recalculated for the selected window.
+
 To publish with Streamlit Community Cloud:
 
 1. Make the GitHub repository public so the dashboard can read Release files

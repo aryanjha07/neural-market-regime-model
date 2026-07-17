@@ -84,6 +84,12 @@ class LoadedHistory:
 
 
 @dataclass(frozen=True, slots=True)
+class LoadedBacktest:
+    frame: pd.DataFrame
+    source: str
+
+
+@dataclass(frozen=True, slots=True)
 class AllocationTarget:
     equity_weight: float
     bond_weight: float
@@ -438,6 +444,61 @@ def load_history(
     raise DashboardDataError(f"No valid prediction history is available ({detail})")
 
 
+def parse_backtest(data: bytes) -> pd.DataFrame:
+    """Validate the compact neural walk-forward audit trail used by the dashboard."""
+
+    try:
+        frame = pd.read_csv(BytesIO(data))
+    except (UnicodeDecodeError, pd.errors.ParserError, ValueError) as exc:
+        raise DashboardDataError("backtest data is not valid CSV") from exc
+    required = [
+        "date",
+        "adaptive_return",
+        "static_60_40_return",
+        "adaptive_equity_weight",
+        "static_60_40_equity_weight",
+        "adaptive_turnover",
+        "adaptive_cost",
+    ]
+    missing = set(required) - set(frame.columns)
+    if frame.empty or missing:
+        raise DashboardDataError(f"backtest data is empty or missing {sorted(missing)}")
+
+    result = frame.loc[:, required].copy()
+    try:
+        result["date"] = pd.to_datetime(result["date"], errors="raise")
+        for column in required[1:]:
+            result[column] = pd.to_numeric(result[column], errors="raise")
+    except (TypeError, ValueError) as exc:
+        raise DashboardDataError("backtest data contains invalid dates or numbers") from exc
+
+    values = result.loc[:, required[1:]]
+    if not values.map(math.isfinite).all().all():
+        raise DashboardDataError("backtest data contains non-finite numbers")
+    if result["date"].duplicated().any() or not result["date"].is_monotonic_increasing:
+        raise DashboardDataError("backtest dates must be unique and chronological")
+    if (result[["adaptive_return", "static_60_40_return"]] <= -1.0).any().any():
+        raise DashboardDataError("backtest returns must be greater than -100%")
+    equity_weights = result[["adaptive_equity_weight", "static_60_40_equity_weight"]]
+    if not equity_weights.map(lambda value: 0.0 <= value <= 1.0).all().all():
+        raise DashboardDataError("backtest equity weights must be between zero and one")
+    if (result[["adaptive_turnover", "adaptive_cost"]] < 0.0).any().any():
+        raise DashboardDataError("backtest turnover and costs cannot be negative")
+    return result.set_index("date")
+
+
+def load_backtest(local_path: str | Path) -> LoadedBacktest:
+    """Load the versioned walk-forward results shipped with the dashboard."""
+
+    path = Path(local_path)
+    if not path.is_file():
+        raise DashboardDataError(f"No backtest data is available at {path}")
+    try:
+        return LoadedBacktest(parse_backtest(path.read_bytes()), str(path))
+    except OSError as exc:
+        raise DashboardDataError(f"Could not read backtest data at {path}") from exc
+
+
 def business_days_since(cutoff: date, *, today: date | None = None) -> int:
     """Return an approximate weekday lag; exchange holidays are intentionally not inferred."""
 
@@ -518,13 +579,16 @@ __all__ = [
     "ForecastSnapshot",
     "LoadedForecast",
     "LoadedHistory",
+    "LoadedBacktest",
     "allocation_target",
     "business_days_since",
     "freshness",
     "load_forecast",
     "load_history",
+    "load_backtest",
     "most_likely",
     "next_scheduled_run",
     "parse_forecast",
     "parse_history",
+    "parse_backtest",
 ]
