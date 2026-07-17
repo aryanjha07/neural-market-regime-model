@@ -6,6 +6,9 @@ __pycache__/
 .ruff_cache/
 .coverage
 
+# Streamlit secrets are configured in the deployment UI, never committed.
+.streamlit/secrets.toml
+
 # Downloaded inputs and generated experiment artifacts
 data/raw/
 data/processed/
@@ -16,4 +19,3 @@ artifacts/
 .DS_Store
 .idea/
 .vscode/
-

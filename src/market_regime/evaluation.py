@@ -34,6 +34,19 @@ class ChronologicalSplit(Generic[T]):
 
 
 @dataclass(frozen=True)
+class WalkForwardSplit(Generic[T]):
+    """One expanding-training fold with validation immediately before testing."""
+
+    fold: int
+    train: T
+    validation: T
+    test: T
+    train_indices: tuple[int, int]
+    validation_indices: tuple[int, int]
+    test_indices: tuple[int, int]
+
+
+@dataclass(frozen=True)
 class LikelihoodComparison:
     """Held-out likelihood comparison, with totals and normalized values."""
 
@@ -117,6 +130,72 @@ def chronological_split(
         validation_indices=(validation_start, validation_stop),
         test_indices=(test_start, test_stop),
     )
+
+
+def expanding_window_splits(
+    data: T,
+    *,
+    initial_train_size: int,
+    validation_size: int,
+    test_size: int,
+    max_folds: int | None = None,
+    require_sorted_index: bool = True,
+) -> list[WalkForwardSplit[T]]:
+    """Create non-overlapping test folds with an expanding training history.
+
+    Validation always contains the observations immediately before a test
+    fold. Once a test fold has passed, its observations become available to
+    later folds. The final test fold may be shorter than ``test_size`` so the
+    latest observations are not silently discarded.
+    """
+
+    sizes = {
+        "initial_train_size": initial_train_size,
+        "validation_size": validation_size,
+        "test_size": test_size,
+    }
+    for name, value in sizes.items():
+        if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < 1:
+            raise ValueError(f"{name} must be a positive integer")
+    if max_folds is not None and (
+        isinstance(max_folds, bool) or not isinstance(max_folds, (int, np.integer)) or max_folds < 1
+    ):
+        raise ValueError("max_folds must be null or a positive integer")
+
+    try:
+        n_observations = len(data)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise ValueError("data must be a sized, sliceable object") from exc
+    if require_sorted_index and isinstance(data, (pd.DataFrame, pd.Series)):
+        if not data.index.is_monotonic_increasing:
+            raise ValueError("data index must be sorted in increasing chronological order")
+
+    first_test_start = int(initial_train_size) + int(validation_size)
+    if n_observations <= first_test_start:
+        raise ValueError(
+            "data must contain initial training, validation, and at least one test observation"
+        )
+
+    folds: list[WalkForwardSplit[T]] = []
+    test_start = first_test_start
+    while test_start < n_observations:
+        if max_folds is not None and len(folds) >= int(max_folds):
+            break
+        validation_start = test_start - int(validation_size)
+        test_stop = min(test_start + int(test_size), n_observations)
+        folds.append(
+            WalkForwardSplit(
+                fold=len(folds) + 1,
+                train=_slice_rows(data, 0, validation_start),
+                validation=_slice_rows(data, validation_start, test_start),
+                test=_slice_rows(data, test_start, test_stop),
+                train_indices=(0, validation_start),
+                validation_indices=(validation_start, test_start),
+                test_indices=(test_start, test_stop),
+            )
+        )
+        test_start = test_stop
+    return folds
 
 
 def compare_log_likelihoods(
@@ -415,10 +494,12 @@ def _one_dimensional_finite(values: ArrayLike, name: str) -> np.ndarray:
 __all__ = [
     "ChronologicalSplit",
     "LikelihoodComparison",
+    "WalkForwardSplit",
     "chronological_split",
     "conditional_log_likelihood",
     "compare_log_likelihoods",
     "compare_models",
+    "expanding_window_splits",
     "name_regimes",
     "summarize_regimes",
 ]

@@ -86,3 +86,37 @@ def plot_backtest(
     figure.savefig(output, dpi=160)
     plt.close(figure)
     return output
+
+
+def plot_walk_forward_likelihood(
+    folds: pd.DataFrame,
+    output_path: str | Path,
+) -> Path:
+    """Plot each model's unseen log-likelihood across walk-forward folds."""
+
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    test_dates = pd.to_datetime(folds["test_end"])
+    colors = {
+        "gaussian": "#457B9D",
+        "mixture": "#E9C46A",
+        "neural": "#2A9D8F",
+    }
+    figure, axis = plt.subplots(figsize=(12, 5))
+    for model in ("gaussian", "mixture", "neural"):
+        column = f"{model}_test_log_likelihood_per_observation"
+        axis.plot(
+            test_dates,
+            folds[column],
+            marker="o",
+            linewidth=1.5,
+            label=model.replace("_", " ").title(),
+            color=colors[model],
+        )
+    axis.set_title("Walk-Forward Log-Likelihood by Test Fold")
+    axis.set_ylabel("Log-likelihood per observation")
+    axis.legend()
+    figure.tight_layout()
+    figure.savefig(output, dpi=160)
+    plt.close(figure)
+    return output

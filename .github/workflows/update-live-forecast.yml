@@ -1,0 +1,381 @@
+name: Update live market forecast
+
+on:
+  schedule:
+    # Yahoo's daily bars should be final by this point. The off-hour minute also
+    # reduces the chance that GitHub delays a busy scheduled-workflow queue.
+    - cron: "37 18 * * 1-5"
+      timezone: America/New_York
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Choose whether this run should retrain the live model
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - predict-only
+          - train-and-predict
+
+permissions:
+  contents: write
+
+concurrency:
+  group: live-forecast-publication
+  cancel-in-progress: false
+
+env:
+  CONFIG_PATH: configs/default.yaml
+  MODEL_DIR: artifacts/live_model
+  PREDICTION_DIR: artifacts/live_predictions
+  RELEASE_TAG: live-forecast
+
+jobs:
+  update:
+    name: Train when due, predict, and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install model runtime
+        run: python -m pip install --disable-pip-version-check .
+
+      - name: Plan this run
+        id: plan
+        env:
+          REQUESTED_MODE: ${{ github.event.inputs.mode || 'auto' }}
+        run: |
+          case "$REQUESTED_MODE" in
+            train-and-predict)
+              retrain=true
+              ;;
+            predict-only)
+              retrain=false
+              ;;
+            auto)
+              if [[ "$(TZ=America/New_York date +%u)" == "1" ]]; then
+                retrain=true
+              else
+                retrain=false
+              fi
+              ;;
+            *)
+              echo "Unknown workflow mode: $REQUESTED_MODE" >&2
+              exit 1
+              ;;
+          esac
+          echo "retrain=$retrain" >> "$GITHUB_OUTPUT"
+          echo "Mode: $REQUESTED_MODE; retrain: $retrain"
+
+      - name: Compute market-data cache key
+        id: market-date
+        run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore same-day market-data cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: data/raw
+          key: market-data-${{ runner.os }}-${{ steps.market-date.outputs.date }}-${{ hashFiles('configs/default.yaml') }}
+
+      - name: Inspect published release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq '.assets[] | select(.state == "uploaded" and .size > 0) | .name' \
+              > /tmp/release-assets.txt
+            history_asset="$(gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq '[.assets[] | select(.state == "uploaded" and .size > 0 and (.name | startswith("prediction_history-")))] | sort_by(.createdAt) | last | .name // ""')"
+            model_asset="$(gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq '[.assets[] | select(.state == "uploaded" and .size > 0 and (.name | startswith("live_model-")))] | sort_by(.createdAt) | last | .name // ""')"
+            if [[ -z "$history_asset" ]] && grep -Fxq prediction_history.csv /tmp/release-assets.txt; then
+              history_asset=prediction_history.csv
+            fi
+            if [[ -z "$model_asset" ]] && grep -Fxq live_model.tar.gz /tmp/release-assets.txt; then
+              model_asset=live_model.tar.gz
+            fi
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            history_asset=""
+            model_asset=""
+            : > /tmp/release-assets.txt
+          fi
+          echo "history_asset=$history_asset" >> "$GITHUB_OUTPUT"
+          echo "model_asset=$model_asset" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve model availability
+        id: model-plan
+        env:
+          REQUESTED_MODE: ${{ github.event.inputs.mode || 'auto' }}
+          PLANNED_RETRAIN: ${{ steps.plan.outputs.retrain }}
+          PUBLISHED_MODEL: ${{ steps.release.outputs.model_asset }}
+        run: |
+          retrain="$PLANNED_RETRAIN"
+          if [[ "$retrain" != "true" && -z "$PUBLISHED_MODEL" ]]; then
+            if [[ "$REQUESTED_MODE" == "auto" ]]; then
+              echo "::notice::No published model exists; bootstrapping it in auto mode."
+              retrain=true
+            else
+              echo "No published live model is available." >&2
+              echo "Run this workflow with mode=train-and-predict first." >&2
+              exit 1
+            fi
+          fi
+          echo "retrain=$retrain" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the published prediction history
+        if: steps.release.outputs.exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HISTORY_ASSET: ${{ steps.release.outputs.history_asset }}
+        run: |
+          if [[ -z "$HISTORY_ASSET" ]]; then
+            if grep -Fxq latest_forecast.json /tmp/release-assets.txt; then
+              echo "The published forecast has no recoverable prediction history." >&2
+              exit 1
+            fi
+            echo "::notice::No stable forecast exists yet; starting a new history."
+            exit 0
+          fi
+          mkdir -p "$PREDICTION_DIR"
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$HISTORY_ASSET" \
+            --output "$PREDICTION_DIR/prediction_history.csv"
+
+      - name: Restore the published live model
+        id: model-restore
+        if: steps.model-plan.outputs.retrain != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODEL_ASSET: ${{ steps.release.outputs.model_asset }}
+          REQUESTED_MODE: ${{ github.event.inputs.mode || 'auto' }}
+        run: |
+          mkdir -p artifacts
+          if gh release download "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern "$MODEL_ASSET" \
+              --output /tmp/live_model.tar.gz \
+            && tar -tzf /tmp/live_model.tar.gz >/dev/null \
+            && tar -xzf /tmp/live_model.tar.gz -C artifacts \
+            && test -f "$MODEL_DIR/model_manifest.json"; then
+            echo "retrain=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$REQUESTED_MODE" == "auto" ]]; then
+            echo "::warning::The published model archive is unusable; retraining it."
+            if [[ "$MODEL_DIR" != "artifacts/live_model" ]]; then
+              echo "Refusing to clean an unexpected model path: $MODEL_DIR" >&2
+              exit 1
+            fi
+            rm -rf -- "$MODEL_DIR"
+            echo "retrain=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "The published model archive could not be restored." >&2
+            exit 1
+          fi
+
+      - name: Download and validate completed market data
+        run: |
+          for attempt in 1 2 3; do
+            if market-regime download --config "$CONFIG_PATH"; then
+              exit 0
+            fi
+            if [[ "$attempt" -lt 3 ]]; then
+              delay=$((attempt * 30))
+              echo "::warning::Market-data attempt $attempt failed; retrying in ${delay}s."
+              sleep "$delay"
+            fi
+          done
+          echo "Market data remained unavailable; the previous public forecast was not changed." >&2
+          exit 1
+
+      - name: Train a fresh live model
+        if: >-
+          steps.model-plan.outputs.retrain == 'true' ||
+          steps.model-restore.outputs.retrain == 'true'
+        run: market-regime train-live --config "$CONFIG_PATH" --model-dir "$MODEL_DIR"
+
+      - name: Generate forecast and recover from revised history
+        id: prediction
+        env:
+          REQUESTED_MODE: ${{ github.event.inputs.mode || 'auto' }}
+          MODEL_WAS_TRAINED: ${{ steps.model-plan.outputs.retrain == 'true' || steps.model-restore.outputs.retrain == 'true' }}
+        run: |
+          if market-regime predict-live \
+            --config "$CONFIG_PATH" \
+            --model-dir "$MODEL_DIR" \
+            --output "$PREDICTION_DIR"; then
+            echo "recovered=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$REQUESTED_MODE" == "auto" && "$MODEL_WAS_TRAINED" != "true" ]]; then
+            echo "::warning::The saved model rejected the latest data; retraining once."
+            market-regime train-live --config "$CONFIG_PATH" --model-dir "$MODEL_DIR"
+            market-regime predict-live \
+              --config "$CONFIG_PATH" \
+              --model-dir "$MODEL_DIR" \
+              --output "$PREDICTION_DIR"
+            echo "recovered=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Prediction failed and this workflow mode does not allow recovery training." >&2
+            exit 1
+          fi
+
+      - name: Validate public forecast files
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          from market_regime.dashboard import parse_forecast, parse_history
+
+          forecast_path = Path("artifacts/live_predictions/latest_forecast.json")
+          with forecast_path.open(encoding="utf-8") as handle:
+              forecast = json.load(handle, parse_constant=lambda value: (_ for _ in ()).throw(
+                  ValueError(f"invalid JSON constant: {value}")
+              ))
+          snapshot = parse_forecast(forecast)
+          history_path = Path("artifacts/live_predictions/prediction_history.csv")
+          history = parse_history(history_path.read_bytes())
+          latest_cutoff = history["prediction_data_cutoff"].max()
+          latest = history.loc[history["prediction_data_cutoff"] == latest_cutoff]
+          if latest_cutoff.date() != snapshot.data_cutoff.date():
+              raise ValueError("history does not contain the forecast data cutoff")
+          if set(latest["model_bundle_id"].astype(str)) != {snapshot.model_bundle_id}:
+              raise ValueError("history and forecast model bundle IDs do not match")
+          expected_states = {(row.state, row.regime) for row in snapshot.current}
+          actual_states = set(zip(latest["state"], latest["regime"], strict=True))
+          if actual_states != expected_states:
+              raise ValueError("history and forecast regime states do not match")
+          PY
+
+      - name: Package publication files
+        run: |
+          mkdir -p release-assets
+          snapshot="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          forecast_snapshot="forecast-${snapshot}.json"
+          history_snapshot="prediction_history-${snapshot}.csv"
+          checksum_snapshot="checksums-${snapshot}.txt"
+          cp "$PREDICTION_DIR/latest_forecast.json" release-assets/latest_forecast.json
+          cp "$PREDICTION_DIR/prediction_history.csv" release-assets/prediction_history.csv
+          cp release-assets/latest_forecast.json "release-assets/$forecast_snapshot"
+          cp release-assets/prediction_history.csv "release-assets/$history_snapshot"
+          model_snapshot=""
+          if [[ "${{ steps.model-plan.outputs.retrain }}" == "true" || \
+                "${{ steps.model-restore.outputs.retrain }}" == "true" || \
+                "${{ steps.prediction.outputs.recovered }}" == "true" ]]; then
+            tar -czf release-assets/live_model.tar.gz -C artifacts live_model
+            model_snapshot="live_model-${snapshot}.tar.gz"
+            cp release-assets/live_model.tar.gz "release-assets/$model_snapshot"
+          fi
+          cd release-assets
+          sha256sum latest_forecast.json prediction_history.csv > checksums.txt
+          if [[ -f live_model.tar.gz ]]; then
+            sha256sum live_model.tar.gz >> checksums.txt
+          elif [[ -f /tmp/live_model.tar.gz ]]; then
+            sha256sum /tmp/live_model.tar.gz | sed 's#/tmp/##' >> checksums.txt
+          fi
+          sha256sum "$forecast_snapshot" "$history_snapshot" > "$checksum_snapshot"
+          if [[ -n "$model_snapshot" ]]; then
+            sha256sum "$model_snapshot" >> "$checksum_snapshot"
+          fi
+          echo "FORECAST_SNAPSHOT=$forecast_snapshot" >> "$GITHUB_ENV"
+          echo "HISTORY_SNAPSHOT=$history_snapshot" >> "$GITHUB_ENV"
+          echo "CHECKSUM_SNAPSHOT=$checksum_snapshot" >> "$GITHUB_ENV"
+          echo "MODEL_SNAPSHOT=$model_snapshot" >> "$GITHUB_ENV"
+
+      - name: Save run artifacts for auditing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: live-forecast-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create the public release when needed
+        if: steps.release.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Latest market-regime forecast" \
+            --notes "Machine-generated live forecast assets. Research output only; not investment advice."
+
+      - name: Publish the validated forecast
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          immutable_files=(
+            "release-assets/$FORECAST_SNAPSHOT"
+            "release-assets/$HISTORY_SNAPSHOT"
+            "release-assets/$CHECKSUM_SNAPSHOT"
+          )
+          if [[ -n "$MODEL_SNAPSHOT" ]]; then
+            immutable_files+=("release-assets/$MODEL_SNAPSHOT")
+          fi
+          gh release upload "$RELEASE_TAG" "${immutable_files[@]}" \
+            --repo "$GITHUB_REPOSITORY"
+
+          supporting_files=(
+            release-assets/prediction_history.csv
+            release-assets/checksums.txt
+          )
+          if [[ -f release-assets/live_model.tar.gz ]]; then
+            supporting_files+=(release-assets/live_model.tar.gz)
+          fi
+          gh release upload "$RELEASE_TAG" "${supporting_files[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+          # Publish the stable pointer last. If an earlier upload fails, dashboard
+          # readers keep seeing the previous fully-published forecast.
+          gh release upload "$RELEASE_TAG" release-assets/latest_forecast.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+
+      - name: Prune old immutable snapshots
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_id="$(gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json databaseId \
+            --jq '.databaseId')"
+
+          prune_prefix() {
+            local prefix="$1"
+            local keep="$2"
+            local asset_ids
+            asset_ids="$(gh api \
+              "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+              --jq "[.[] | select(.name | startswith(\"$prefix\"))] | sort_by(.created_at) | reverse | .[$keep:] | .[].id")"
+            while IFS= read -r asset_id; do
+              [[ -z "$asset_id" ]] && continue
+              gh api --method DELETE \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+            done <<< "$asset_ids"
+          }
+
+          prune_prefix forecast- 14
+          prune_prefix prediction_history- 14
+          prune_prefix checksums- 14
+          prune_prefix live_model- 8

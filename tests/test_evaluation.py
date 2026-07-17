@@ -9,6 +9,7 @@ from market_regime.evaluation import (
     compare_log_likelihoods,
     compare_models,
     conditional_log_likelihood,
+    expanding_window_splits,
     name_regimes,
     summarize_regimes,
 )
@@ -44,6 +45,58 @@ def test_chronological_split_rejects_unsorted_time_index() -> None:
     )
     with pytest.raises(ValueError, match="sorted"):
         chronological_split(frame)
+
+
+def test_expanding_window_splits_use_non_overlapping_tests_and_partial_final_fold() -> None:
+    index = pd.date_range("2020-01-01", periods=30, freq="D")
+    frame = pd.DataFrame({"value": np.arange(30)}, index=index)
+
+    folds = expanding_window_splits(
+        frame,
+        initial_train_size=10,
+        validation_size=5,
+        test_size=6,
+    )
+
+    assert [fold.train_indices for fold in folds] == [(0, 10), (0, 16), (0, 22)]
+    assert [fold.validation_indices for fold in folds] == [(10, 15), (16, 21), (22, 27)]
+    assert [fold.test_indices for fold in folds] == [(15, 21), (21, 27), (27, 30)]
+    test_positions = [position for fold in folds for position in range(*fold.test_indices)]
+    assert test_positions == list(range(15, 30))
+    assert folds[-1].test["value"].tolist() == [27, 28, 29]
+
+
+def test_expanding_window_splits_support_fold_limit() -> None:
+    folds = expanding_window_splits(
+        list(range(40)),
+        initial_train_size=10,
+        validation_size=5,
+        test_size=5,
+        max_folds=2,
+    )
+
+    assert len(folds) == 2
+    assert folds[-1].test_indices == (20, 25)
+
+
+@pytest.mark.parametrize(
+    "initial_train_size, validation_size, test_size, max_folds",
+    [(0, 5, 5, None), (10, 0, 5, None), (10, 5, 0, None), (10, 5, 5, 0)],
+)
+def test_expanding_window_splits_reject_invalid_sizes(
+    initial_train_size: int,
+    validation_size: int,
+    test_size: int,
+    max_folds: int | None,
+) -> None:
+    with pytest.raises(ValueError):
+        expanding_window_splits(
+            list(range(40)),
+            initial_train_size=initial_train_size,
+            validation_size=validation_size,
+            test_size=test_size,
+            max_folds=max_folds,
+        )
 
 
 @pytest.mark.parametrize(

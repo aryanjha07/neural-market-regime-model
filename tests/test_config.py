@@ -13,6 +13,9 @@ def test_default_config_loads() -> None:
     assert config.data.equity_ticker == "SPY"
     assert config.backtest.execution_lag == 2
     assert config.split.train_fraction + config.split.validation_fraction < 1
+    assert config.walk_forward.initial_train_size == 2520
+    assert config.walk_forward.validation_size == 252
+    assert config.walk_forward.test_size == 252
 
 
 def test_invalid_split_is_rejected(tmp_path: Path) -> None:
@@ -23,4 +26,12 @@ def test_invalid_split_is_rejected(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="leave a test set"):
+        load_config(path)
+
+
+def test_invalid_walk_forward_size_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "bad_walk_forward.yaml"
+    path.write_text("walk_forward:\n  test_size: 0\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="walk_forward.test_size"):
         load_config(path)

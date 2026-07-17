@@ -33,6 +33,14 @@ class SplitConfig:
 
 
 @dataclass(slots=True)
+class WalkForwardConfig:
+    initial_train_size: int = 2_520
+    validation_size: int = 252
+    test_size: int = 252
+    max_folds: int | None = None
+
+
+@dataclass(slots=True)
 class ModelConfig:
     n_states: int = 3
     n_mixtures: int = 3
@@ -61,6 +69,7 @@ class ExperimentConfig:
     data: DataConfig = field(default_factory=DataConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
     split: SplitConfig = field(default_factory=SplitConfig)
+    walk_forward: WalkForwardConfig = field(default_factory=WalkForwardConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
 
@@ -79,6 +88,20 @@ class ExperimentConfig:
             raise ValueError("split.validation_fraction must be between 0 and 1")
         if self.split.train_fraction + self.split.validation_fraction >= 1:
             raise ValueError("train and validation fractions must leave a test set")
+        walk_forward_sizes = {
+            "initial_train_size": self.walk_forward.initial_train_size,
+            "validation_size": self.walk_forward.validation_size,
+            "test_size": self.walk_forward.test_size,
+        }
+        for name, value in walk_forward_sizes.items():
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"walk_forward.{name} must be a positive integer")
+        if self.walk_forward.max_folds is not None and (
+            isinstance(self.walk_forward.max_folds, bool)
+            or not isinstance(self.walk_forward.max_folds, int)
+            or self.walk_forward.max_folds < 1
+        ):
+            raise ValueError("walk_forward.max_folds must be null or a positive integer")
         weights = (
             self.backtest.calm_equity_weight,
             self.backtest.neutral_equity_weight,
@@ -103,7 +126,7 @@ class ExperimentConfig:
 
 
 def _construct_config(values: dict[str, Any]) -> ExperimentConfig:
-    allowed = {"seed", "data", "features", "split", "model", "backtest"}
+    allowed = {"seed", "data", "features", "split", "walk_forward", "model", "backtest"}
     unknown = set(values) - allowed
     if unknown:
         raise ValueError(f"Unknown top-level configuration keys: {sorted(unknown)}")
@@ -113,6 +136,7 @@ def _construct_config(values: dict[str, Any]) -> ExperimentConfig:
         data=DataConfig(**values.get("data", {})),
         features=FeatureConfig(**values.get("features", {})),
         split=SplitConfig(**values.get("split", {})),
+        walk_forward=WalkForwardConfig(**values.get("walk_forward", {})),
         model=ModelConfig(**values.get("model", {})),
         backtest=BacktestConfig(**values.get("backtest", {})),
     )

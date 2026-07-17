@@ -10,7 +10,6 @@ from typing import Any
 import joblib
 import numpy as np
 import pandas as pd
-import torch
 import yaml
 
 from market_regime.backtest import BacktestResult, run_regime_backtest
@@ -30,6 +29,7 @@ from market_regime.features import (
     transform_features,
 )
 from market_regime.neural_hmm import NeuralEmissionHMM
+from market_regime.training import select_models_by_validation
 
 
 @dataclass(slots=True)
@@ -263,60 +263,19 @@ def run_dataset_experiment(
     x_all = scaled.to_numpy(dtype=np.float64)
 
     validation_count = test_start - train_stop
-    selected: dict[str, tuple[Any, float]] = {}
-    for restart in range(config.model.n_restarts):
-        seed = config.seed + restart
-        candidates: dict[str, Any] = {
-            "gaussian": GaussianHMMBaseline(
-                n_states=config.model.n_states,
-                covariance_type="full",
-                min_covar=config.model.min_covar,
-                random_state=seed,
-            ).fit(x_train),
-            "mixture": GaussianMixtureHMMBaseline(
-                n_states=config.model.n_states,
-                n_mixtures=config.model.n_mixtures,
-                covariance_type="diag",
-                min_covar=config.model.min_covar,
-                random_state=seed,
-            ).fit(x_train),
-        }
-        torch.manual_seed(seed)
-        candidates["neural"] = NeuralEmissionHMM(
-            n_states=config.model.n_states,
-            n_features=x_train.shape[1],
-            n_components=config.model.n_mixtures,
-            hidden_dim=16,
-            min_scale=config.model.min_scale,
-            random_state=seed,
-        ).fit(
-            x_train,
-            n_iter=config.model.epochs,
-            learning_rate=config.model.learning_rate,
-            emission_steps=config.model.emission_steps,
-            verbose=verbose,
-        )
-
-        for name, candidate in candidates.items():
-            validation_score = conditional_log_likelihood(
-                candidate,
-                x_all,
-                start=train_stop,
-                stop=test_start,
-            )
-            if verbose:
-                print(
-                    f"restart={restart + 1} model={name} "
-                    f"validation_nats_per_day={validation_score / validation_count:.6f}"
-                )
-            if name not in selected or validation_score > selected[name][1]:
-                selected[name] = (candidate, validation_score)
-
-    baseline = selected["gaussian"][0]
-    mixture = selected["mixture"][0]
-    neural = selected["neural"][0]
+    selection = select_models_by_validation(
+        x_train,
+        x_all,
+        validation_start=train_stop,
+        validation_stop=test_start,
+        config=config,
+        verbose=verbose,
+    )
+    baseline = selection.models["gaussian"]
+    mixture = selection.models["mixture"]
+    neural = selection.models["neural"]
     validation_log_likelihoods = {
-        name: score / validation_count for name, (_, score) in selected.items()
+        name: score / validation_count for name, score in selection.validation_scores.items()
     }
 
     baseline_test_score = conditional_log_likelihood(

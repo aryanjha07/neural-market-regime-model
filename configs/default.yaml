@@ -17,6 +17,12 @@ split:
   train_fraction: 0.70
   validation_fraction: 0.15
 
+walk_forward:
+  initial_train_size: 2520
+  validation_size: 252
+  test_size: 252
+  max_folds: null
+
 model:
   n_states: 3
   n_mixtures: 3

@@ -1,0 +1,4 @@
+# Dashboard-only environment for Streamlit Community Cloud.
+# Model training uses the full dependency set declared in pyproject.toml.
+streamlit==1.59.2
+pandas>=2.2,<3
