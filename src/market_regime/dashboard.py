@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -27,6 +28,9 @@ DEFAULT_HISTORY_URL = (
 )
 MAX_FORECAST_BYTES = 2_000_000
 MAX_HISTORY_BYTES = 10_000_000
+UPDATE_TIME_ZONE = ZoneInfo("America/New_York")
+UPDATE_WEEKDAYS = frozenset(range(5))
+UPDATE_LOCAL_TIME = time(hour=18, minute=37)
 
 
 class DashboardDataError(ValueError):
@@ -460,6 +464,28 @@ def freshness(snapshot: ForecastSnapshot, *, today: date | None = None) -> tuple
     return "Stale", lag
 
 
+def next_scheduled_run(*, now: datetime | None = None) -> datetime:
+    """Return the next weekday 6:37 PM New York workflow start in UTC."""
+
+    current = datetime.now(UTC) if now is None else now
+    if current.tzinfo is None or current.utcoffset() is None:
+        raise ValueError("now must include timezone information")
+
+    local_now = current.astimezone(UPDATE_TIME_ZONE)
+    for day_offset in range(8):
+        candidate_date = local_now.date() + timedelta(days=day_offset)
+        if candidate_date.weekday() not in UPDATE_WEEKDAYS:
+            continue
+        candidate = datetime.combine(
+            candidate_date,
+            UPDATE_LOCAL_TIME,
+            tzinfo=UPDATE_TIME_ZONE,
+        )
+        if candidate > local_now:
+            return candidate.astimezone(UTC)
+    raise RuntimeError("could not calculate the next scheduled workflow run")
+
+
 def most_likely(rows: tuple[RegimeProbability, ...]) -> RegimeProbability:
     return max(rows, key=lambda row: row.probability)
 
@@ -498,6 +524,7 @@ __all__ = [
     "load_forecast",
     "load_history",
     "most_likely",
+    "next_scheduled_run",
     "parse_forecast",
     "parse_history",
 ]

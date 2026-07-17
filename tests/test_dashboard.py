@@ -1,6 +1,6 @@
 import copy
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pandas as pd
 import pytest
@@ -11,6 +11,7 @@ from market_regime.dashboard import (
     business_days_since,
     freshness,
     load_forecast,
+    next_scheduled_run,
     parse_forecast,
     parse_history,
 )
@@ -163,3 +164,14 @@ def test_freshness_counts_weekdays_without_marking_a_weekend_stale(forecast_payl
         business_days_since(date(2026, 7, 21), today=date(2026, 7, 20))
     assert freshness(snapshot, today=date(2026, 7, 17)) == ("Fresh", 1)
     assert freshness(snapshot, today=date(2026, 7, 21)) == ("Stale", 3)
+
+
+def test_next_scheduled_run_uses_new_york_time_and_skips_weekends() -> None:
+    before_friday_run = datetime(2026, 7, 17, 20, 15, tzinfo=UTC)
+    after_friday_run = datetime(2026, 7, 17, 23, 0, tzinfo=UTC)
+
+    assert next_scheduled_run(now=before_friday_run) == datetime(2026, 7, 17, 22, 37, tzinfo=UTC)
+    assert next_scheduled_run(now=after_friday_run) == datetime(2026, 7, 20, 22, 37, tzinfo=UTC)
+
+    with pytest.raises(ValueError, match="timezone"):
+        next_scheduled_run(now=datetime(2026, 7, 17, 12, 0))

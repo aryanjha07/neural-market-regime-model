@@ -23,6 +23,7 @@ from market_regime.dashboard import (  # noqa: E402
     load_forecast,
     load_history,
     most_likely,
+    next_scheduled_run,
 )
 
 LOCAL_FORECAST = ROOT / "artifacts/live_predictions/latest_forecast.json"
@@ -106,6 +107,65 @@ def _source_name(source: str) -> str:
     return "GitHub Release" if source.startswith(("http://", "https://")) else "local artifact"
 
 
+def _update_countdown() -> None:
+    target = next_scheduled_run()
+    target_milliseconds = int(target.timestamp() * 1000)
+    st.iframe(
+        f"""
+        <div class="update-timer">
+          <span class="timer-label">Next automatic data update</span>
+          <strong id="countdown">Calculating...</strong>
+          <span class="timer-schedule">Weekdays at 6:37 PM New York time</span>
+        </div>
+        <script>
+          const target = {target_milliseconds};
+          const output = document.getElementById("countdown");
+          function updateCountdown() {{
+            const remaining = Math.max(0, target - Date.now());
+            const totalSeconds = Math.floor(remaining / 1000);
+            const days = Math.floor(totalSeconds / 86400);
+            const hours = Math.floor((totalSeconds % 86400) / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            const parts = [];
+            if (days > 0) parts.push(`${{days}}d`);
+            parts.push(`${{hours}}h`, `${{minutes}}m`, `${{seconds}}s`);
+            output.textContent = parts.join(" ");
+          }}
+          updateCountdown();
+          window.setInterval(updateCountdown, 1000);
+        </script>
+        <style>
+          html, body {{ margin: 0; background: transparent; }}
+          .update-timer {{
+            box-sizing: border-box;
+            min-height: 58px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 10px 14px;
+            border: 1px solid #D7DEE8;
+            border-radius: 6px;
+            background: #FFFFFF;
+            color: #172033;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          }}
+          .timer-label {{ color: #526074; font-size: 14px; }}
+          #countdown {{ font-size: 20px; white-space: nowrap; }}
+          .timer-schedule {{ margin-left: auto; color: #667085; font-size: 12px; }}
+          @media (max-width: 560px) {{
+            .update-timer {{ flex-wrap: wrap; gap: 3px 10px; }}
+            .timer-label {{ width: 100%; }}
+            .timer-schedule {{ margin-left: 0; width: 100%; }}
+          }}
+        </style>
+        """,
+        width="stretch",
+        height=70,
+        tab_index=-1,
+    )
+
+
 st.set_page_config(
     page_title="Market Regime Monitor",
     page_icon=":material/candlestick_chart:",
@@ -176,6 +236,8 @@ st.caption(
     f"{snapshot.assets['volatility']} volatility · Data through "
     f"{snapshot.data_cutoff:%B %d, %Y}"
 )
+
+_update_countdown()
 
 metric_columns = st.columns(4)
 metric_columns[0].metric(
