@@ -221,7 +221,7 @@ st.html(
     .block-container {
         width: 100%;
         max-width: none !important;
-        padding: 1.65rem clamp(1rem, 2.2vw, 3rem) 3rem;
+        padding: 4.5rem clamp(1rem, 2.2vw, 3rem) 3rem;
     }
     h1, h2, h3, p, span, label { letter-spacing: 0 !important; }
     h1 {
@@ -313,7 +313,7 @@ st.html(
     iframe[title="st.iframe"] { border: 0; }
     .footer-note { color: #718693; font-size: 0.82rem; margin-top: 1.5rem; }
     @media (max-width: 640px) {
-        .block-container { padding: 3.75rem 1rem 2.5rem; }
+        .block-container { padding: 4.25rem 1rem 2.5rem; }
         h1 { font-size: 1.65rem !important; }
         div[data-testid="stMetric"] { min-height: 104px; }
     }
