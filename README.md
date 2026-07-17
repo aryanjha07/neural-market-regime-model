@@ -14,6 +14,13 @@ data, so this is an **unsupervised machine-learning project**.
 This project estimates the probability of the next market regime. It does not
 promise to predict tomorrow's exact return or guarantee a profitable trade.
 
+## Live Dashboard
+
+[Open the public Market Regime Monitor](https://aryanjha07-neural-market-regime-model-streamlit-app-qvshs2.streamlit.app/)
+
+The dashboard shows the latest regime probabilities and the example stock and
+bond allocation. GitHub Actions refreshes its public forecast automatically.
+
 ## What The Project Does
 
 The complete pipeline can:
@@ -374,7 +381,8 @@ To publish with Streamlit Community Cloud:
 4. Open `share.streamlit.io`, choose **Create app**, and select
    `aryanjha07/neural-market-regime-model`.
 5. Choose branch `main`, entrypoint `streamlit_app.py`, and Python 3.12.
-6. Deploy the app and open its new `streamlit.app` address.
+6. Deploy the app and open the
+   [public dashboard](https://aryanjha07-neural-market-regime-model-streamlit-app-qvshs2.streamlit.app/).
 
 No Streamlit secret is needed while this repository and its Release are public.
 The URL settings are optional overrides for a fork or a different publication
