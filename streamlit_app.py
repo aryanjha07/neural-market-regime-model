@@ -75,12 +75,13 @@ def _probability_frame(rows) -> pd.DataFrame:  # noqa: ANN001
     ).sort_values("Probability", ascending=False)
 
 
-def _probability_chart(frame: pd.DataFrame) -> None:
+def _probability_chart(frame: pd.DataFrame, *, key: str | None = None) -> None:
     domain = list(REGIME_COLORS)
     colors = [REGIME_COLORS[name] for name in domain]
     st.vega_lite_chart(
-        frame,
-        {
+        spec={
+            "data": {"values": frame.to_dict(orient="records")},
+            "description": key or "Regime probability chart",
             "background": None,
             "height": 238,
             "mark": {
@@ -127,6 +128,7 @@ def _probability_chart(frame: pd.DataFrame) -> None:
             },
         },
         width="stretch",
+        key=key,
     )
 
 
@@ -478,7 +480,10 @@ with forecast_tab:
             label_visibility="collapsed",
         )
         selected_rows = snapshot.next_session if horizon == "Next session" else snapshot.current
-        _probability_chart(_probability_frame(selected_rows))
+        _probability_chart(
+            _probability_frame(selected_rows),
+            key=f"regime_probability_{horizon.lower().replace(' ', '_')}",
+        )
         st.caption(
             "The model estimates a hidden market condition. It does not predict the exact "
             "price, return, or direction of the next session."
